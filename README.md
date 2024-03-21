@@ -5,7 +5,7 @@ This project aims at describing reflection of charge carriers off a crystal boun
 * **support of boundary properties**: roughness, orientation, etc.;
 * **import of Bloch/Wannier data** from output files of [`qimpy`](https://github.com/shankar1729/qimpy) and other DFT packages.
 
-The code is designed to be used either as a Python library or as a standalone command-line tool. For further details of the physics, the usage modes, and the features, see a [**description**](/docs/riflesso.pdf).
+The code is designed to be used either as a Python library or as a standalone command-line tool. For further details of the physics, the usage modes, and the features, see a [**description**](/doc/riflesso.pdf).
 
 
 <!--
