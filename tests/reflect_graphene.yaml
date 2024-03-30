@@ -1,0 +1,34 @@
+# Find reflectance of graphene bands
+riflesso:
+    lattice: 
+        lattice-vectors-units:  Angstrom       # The units in which a, b, c are measured [default to Angstrom]
+        a.Cartesian:            [4.651, 0, 0]
+        b.Cartesian:            [-2.3255, 4.02788, 0]
+        c.Cartesian:            [0, 0, 15]             # Just a dummy vector that's large enough
+    electronic-structure:
+        type:                  Wannierized
+        format:                jdftx
+        filename.dft-output:   "../jdftx_calculations/graphene/scf_fine.out"
+        filename.wannier-stem: "../jdftx_calculations/graphene/wannier"
+    solver: 
+        method:      adiabatic
+        E-tolerance: 5e-4 eV
+    boundary-potential:
+        shape:       kink.tanh                 # Another option is kink.piecewise_linear
+        height:      10.0 eV                   # V(+inf) - V(-inf); should be large enough for reflection
+        width:       5.0 Angstrom              # A characteristic _spatial_ scale of V(z)
+    projector:
+        type:        default
+        k-grid:      input
+    task:
+        type:               reflection-coeffs
+        bands:              all
+        k-point-grid:       8 8 1
+        boundary-normals:
+            type:           in-plane
+            plane-normal:   [0, 0, 1]
+            degrees-range:  [0, 360, 10]
+        output-filename:    'reflection_coeffs_graphene.dat'
+        output-format:      table
+    output:
+        logfile: "output.log"
