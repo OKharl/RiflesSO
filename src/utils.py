@@ -5,13 +5,16 @@
 # for further merging with R.Sundararaman's qimpy project.
 # =================================================================================================
 
-from typing import Sequence, List, Union, Tuple, IO
+from typing import Sequence, List, Union, Tuple, IO, Set, Optional
+from numpy.typing import NDArray
 import numpy as np
 from math import gcd, floor
 from fractions import Fraction
 from functools import wraps
 from time import perf_counter
 import re
+
+from . import units
 
 # ------------------------------------------------------------------------------------------------
 # General-purpose functions
@@ -31,21 +34,37 @@ def timeit(func):
         return result
     return timeit_wrapper
 
-def nparr2str(a: np.ndarray, prec=3, fmt='fixed', **kwargs):
+def nparr2str(a: NDArray, prec=3, fmt='fixed', **kwargs):
     "Just an alias for numpy array fomatting: nparr2str(np_array [, prec=3 [, fmt='fixed' [, kwargs]]])"
-    return np.array2string(a, precision=prec, floatmode=fmt, max_line_width=None, *kwargs)
+    if fmt == 'fixed':
+        fmt_func = lambda x: format(x, f'.{prec}f')
+    elif fmt == 'exponential':
+        fmt_func = lambda x: format(x, f'.{prec}e')
+    else:
+        fmt_func = None
+    if fmt_func is None:
+        return np.array2string(a, precision=prec, max_line_width=256, *kwargs)
+    else:
+        return np.array2string(a, max_line_width=256, 
+                               formatter={'float_kind': fmt_func, 'complex_kind': fmt_func}, *kwargs
+                              )
 
 # ------------------------------------------------------------------------------------------------
 # Regular expression/parsing related functions (to be refactored to a separate parser module)
 # ------------------------------------------------------------------------------------------------
 
 # RegEx constants and the corresponding
-re_int = r'[+-]?\d+'
-re_int_group = '(' + re_int + ')'
-re_real_fixed = re_int + r'(?:\.\d*)?' + '|' + r'\.\d+'
-re_real_fixed_group = '(' + re_real_fixed + ')'
-re_real = re_real_fixed + '(?:[eE]' + re_int + ')?'
-re_real_group = '(' + re_real + ')'
+def _re_group(re: str) -> str: return '(' + re + ')'
+def _re_anongroup(re: str) -> str: return '(?:' + re + ')'
+_re_int_bare = r'[+-]?\d+'
+re_int = _re_anongroup(_re_int_bare)
+re_int_group = _re_group(re_int)
+_re_real_fixed_bare = _re_int_bare + r'(?:\.\d*)?' + '|' + r'\.\d+'
+re_real_fixed = _re_anongroup(_re_real_fixed_bare)
+re_real_fixed_group = _re_group(_re_real_fixed_bare)
+_re_real_bare = re_real_fixed + _re_anongroup('[eE]' + _re_int_bare) + '?'
+re_real_bare = _re_anongroup(_re_real_bare)
+re_real_group = _re_group(_re_real_bare)
 re_whitespace = r'\s+'
 re_opt_whitespace = r'\s*'
 
@@ -79,13 +98,76 @@ def find_line_in_file(f: IO, accepted_line_sequences: List[List[str]], flags=0):
                 captured_groups[iseq].append(m.groups())
                 if len(captured_groups[iseq]) == len(accepted_line_sequences[iseq]):
                     return (iseq, captured_groups[iseq])
-        
+
+# ------------------------------------------------------------------------------------------------
+# Units-related functions
+# ------------------------------------------------------------------------------------------------
+_all_units = { 
+                'cm': units.cm, 'Angstrom': units.Angstrom, 'Bohr': units.BohrRadius, 'm': units.meter,
+                'g': units.gram, 'kg': units.kg, 'amu': units.amu,
+                'sec': units.sec,
+                'erg': units.erg, 'J': units.Joule,
+                'eV': units.eV, 'meV': units.meV, 'Ha': units.Hartree, 'Ry': 0.5 * units.Hartree,
+                'deg': units.Degree, 'rad': 1.0
+             }
+
+#def unit_value(unit_spec: str, allowed_units: Optional[Set[str]]=_all_units.keys()) -> float:
+#    i = 0
+#    
+#    def read_token() -> str:
+#        while i < len(unit_spec) and unit_spec[i].isspace():
+#            i += 1
+#        if i >= len(unit_spec):
+#            return None
+#        tok = ''
+#        ch = unit_spec[i]
+#        if ch in ['/', '*', '^']:   # A sign
+#            i += 1
+#            if i < len(unit_spec) and unit_spec[i] == '*':    # A ** (raising to a power) token
+#                i += 1
+#                ch += '*'
+#            return ch
+#        elif not ch.isalpha():      # Should be a unit name
+#            raise ValueError(f"In unit_value(): unallowed character '{ch}' in unit specification")
+#        else:
+#            i += 1
+#            while i < len(unit_spec) and unit_spec[i].isalnum():
+#                ch += unit_spec[i]
+#                i += 1
+#            return ch
+#    
+#    valstack = []
+#    while 
+
+def float_with_units(s: str, 
+                     default_units: Optional[Union[float,str]]=1.0, 
+                     allowed_units: Optional[Set[str]]=_all_units.keys()) -> float:
+    'Parse a floating-point number followed by one of the allowed_units'
+    default_unit_value = _all_units[default_units] if isinstance(default_units, str) else default_units
+    m = re.match(re_real_group + '$', s.strip())
+    if m != None:
+        return float(s) * default_unit_value
+    m = re.match(re_real_group + re_whitespace + r'([\w\s\*\/\^]+)' + '$', s.strip())
+    if m != None:
+        number = float(m.group(1))
+        units_spec = m.group(2)
+        units_spec = units_spec.replace('^', '**')
+        for w in allowed_units:
+            units_spec = re.sub(r'(^|[^\w])' + w + r'([^\w]|$)', 
+                                lambda m: m.group(1) + '(' + str(_all_units[w]) + ')' + m.group(2), 
+                                units_spec)
+        try:
+            units_value = eval(units_spec, {}, {})
+            return number * units_value
+        except:
+            raise ValueError('In float_with_units(): cannot compile unit specification')
+
 
 # ------------------------------------------------------------------------------------------------
 # Mathematical/linear algebra functions
 # ------------------------------------------------------------------------------------------------
 
-def normalize(vec: np.ndarray) -> np.ndarray:
+def normalize(vec: NDArray) -> NDArray:
     "Normalize an n-dimensional vector to unity "
     return vec / np.linalg.norm(vec)
 
@@ -232,119 +314,3 @@ def snap_to_rational(x: float, deltax: float = 0.01) -> Fraction:
 # Unit tests
 # ------------------------------------------------------------------------------------------------
 
-if __name__ == '__main__':
-    from math import sqrt, pi
-
-    print('==========================================================================================\n' +
-          '                             Testing utils.py module...\n' +
-          '==========================================================================================')
-    print('Testing homogeneous 2-variable Diophantine solver solve_LDE_2vars_homo(),\n' +
-          'which finds a fundamental solution (x, y) of ax + by = 0 over integers...')
-    current_test = failed_tests = succeeded_tests = 0
-    for a, b in np.random.randint(-25, 25, size=(50, 2)):
-        current_test += 1
-        if a == 0 and b == 0:
-            print(f'\tTest #{current_test}: a = b = 0, skipping a degenerate LDE...')
-            continue
-        sol = solve_LDE_2vars_homo(a, b)
-        subst = (a * sol[0] + b * sol[1] == 0)
-        if subst == True:
-            succeeded_tests += 1
-        else:
-            failed_tests += 1
-        print(f'\tTest #{current_test}: a = {a}, b = {b}: solve_LDE_2vars_homo(a, b) = {sol}; ' +
-              f'solution substitution correct: {subst}')
-    print(f'{succeeded_tests}/{succeeded_tests + failed_tests} tests succeeded')
-    
-    print('------------------------------------------------------------------------------------------')
-    print('Testing generalized Euclidean algorithm generalized_euclidean_algorithm(), namely,\n' +
-          'a Diophantine solver ax + by = 1...')
-    current_test = failed_tests = succeeded_tests = 0
-    for a, b in np.random.randint(-100, 100, size=(50, 2)):
-        current_test += 1
-        if a == 0 and b == 0 or gcd(a, b) != 1:
-            print(f'\tTest #{current_test}: a = b = 0 or a and b aren\'t coprime, skipping test...')
-            continue
-        print(f'\tTest #{current_test}: a = {a}, b = {b}: ', end='')
-        x, y = generalized_euclidean_algorithm(a, b)
-        subst = (a * x + b * y == 1)
-        if subst == True:
-            succeeded_tests += 1
-        else:
-            failed_tests += 1
-        print(f'generalized_euclidean_algorithm(a, b) = {(x, y)}; solution substitution correct: {subst}')
-    print(f'{succeeded_tests}/{succeeded_tests + failed_tests} tests succeeded')
-    
-    print('------------------------------------------------------------------------------------------')
-    print('Testing inhomogeneous 2-variable Diophantine solver solve_LDE_2vars_inhomo(),\n' +
-          'which finds a fundamental solution (x, y) of ax + by = c over integers...')
-    current_test = failed_tests = succeeded_tests = 0
-    for a, b, c in np.random.randint(-100, 100, size=(50, 3)):
-        current_test += 1
-        if a == 0 and b == 0:
-            print(f'\tTest #{current_test}: a = b = 0, skipping test...')
-            continue
-        print(f'\tTest #{current_test}: a = {a}, b = {b}, c = {c}: ', end='')
-        solution = solve_LDE_2vars_inhomo(a, b, c)
-        if solution == None:
-            print(f'solve_LDE_2vars_inhomo() = None, hard to check, skipping...')
-            continue
-        (x, y), (u, v) = solution
-        print(f'part_sol = {(x, y)}, sol_shift = {(u, v)}', end='')
-        subst = True 
-        for n in np.random.randint(-100, 100, size=10):
-            subst = subst and (a * (x + n * u) + b * (y + n * v) == c)
-            if subst == False:
-                break
-        if subst == True:
-            succeeded_tests += 1
-        else:
-            failed_tests += 1
-        print(f'; solution substitution correct: {subst}')
-    print(f'{succeeded_tests}/{succeeded_tests + failed_tests} tests succeeded')
-
-    print('------------------------------------------------------------------------------------------')
-    print('Testing homogeneous 3-variable Diophantine solver solve_LDE_3vars_homo(),\n' +
-          'which finds two fundamental solutions (x, y, z) of ax + by + cz = 0 over integers...')
-    current_test = failed_tests = succeeded_tests = 0
-    for a, b, c in np.random.randint(-100, 100, size=(50, 3)):
-        current_test += 1
-        if a == 0 and b == 0 and c == 0:
-            print(f'\tTest #{current_test}: a = b = c = 0, skipping test...')
-            continue
-        print(f'\tTest #{current_test}: a = {a}, b = {b}, c = {c}: ', end='')
-        solution1, solution2 = solve_LDE_3vars_homo(a, b, c)
-        print(f'sol_1 = {solution1}, sol_2 = {solution2}', end='')
-        subst = True 
-        for m, n in np.random.randint(-100, 100, size=(10, 2)):
-            subst = subst and np.dot([a, b, c], m * np.array(solution1) + n * np.array(solution2)) == 0
-            if subst == False:
-                break
-        if subst == True:
-            succeeded_tests += 1
-        else:
-            failed_tests += 1
-        print(f'; solution substitution correct: {subst}')
-    print(f'{succeeded_tests}/{succeeded_tests + failed_tests} tests succeeded')
-
-    print('------------------------------------------------------------------------------------------')
-    print('Testing rational approximations snap_to_rational(x) -> m/n...')
-    current_test = failed_tests = succeeded_tests = 0
-    # Each test is of the form [x, deltax, m, n]
-    golden_mean = 0.5 * (1 + sqrt(5.0))
-    tests = [[pi, 0.01, 22, 7], [pi, 0.03, 19, 6], [pi, 0.1, 16, 5], [pi, 0.001, 201, 64], 
-             [1234.0, 0.43, 1234, 1], [12.0, 5, 12, 1], [0.0, 0.0001, 0, 1],
-             [golden_mean, 0.01, 13, 8], [golden_mean, 0.005, 21, 13], [golden_mean, 0.001, 55, 34]
-            ]
-    for x, deltax, m, n in tests:
-        current_test += 1
-        print(f'\tTest #{current_test}: x = {x}, deltax = {deltax}: ', end='')
-        sol = snap_to_rational(x, deltax)
-        subst = (sol == Fraction(m, n))
-        print(f'snap_to_rational(x, deltax) = {sol}; solution correct = ', subst)
-        if subst:
-            succeeded_tests += 1
-        else:
-            failed_tests += 1
-    print(f'{succeeded_tests}/{succeeded_tests + failed_tests} tests succeeded')
-        

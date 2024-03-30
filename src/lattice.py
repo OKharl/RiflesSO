@@ -6,8 +6,11 @@
 # =================================================================================================
 
 from typing import Sequence, List, Union, Optional, Tuple
+from numpy.typing import NDArray
 import numpy as np
+import yaml
 import re
+
 from .utils import lcm_list, reduce_to_coprimes, normalize, solve_LDE_3vars_homo, snap_to_rational
 from . import utils   # For re_* RegEx constants
 from . import units
@@ -17,8 +20,8 @@ class CrystalLattice:
     '''Encapsulates a periodic Bravais lattice filling a d-dimensional half-space (d=1,2,3) 
     embedded into the n-dimensional target space (n >= d), as well as the corresponding reciprocal space'''
 
-    _lattice_vectors: np.ndarray       #: d lattice vectors as columns of a matrix (shape = (n,d))
-    _reciprocal_vectors: np.ndarray    #: d reciprocal vectors as rows of matrix (shape = (d,n))
+    _lattice_vectors: NDArray       #: d lattice vectors as columns of a matrix (shape = (n,d))
+    _reciprocal_vectors: NDArray    #: d reciprocal vectors as rows of matrix (shape = (d,n))
 
     def __init__(self, *, 
                  lattice_vectors:  Sequence[float] = np.identity(3, dtype=float)
@@ -28,12 +31,12 @@ class CrystalLattice:
         '''
         self.lattice_vectors = lattice_vectors # Also initializes reciprocals
 
-    def metric_tensor(self) -> np.ndarray:
+    def metric_tensor(self) -> NDArray:
         "Returns a (dxd) matrix g_ab = <e_a|e_b>, where e_a is the lattice vector No.a"
         return self._lattice_vectors.T.dot(self._lattice_vectors)
 
     @property
-    def reciprocal_vectors(self) -> np.ndarray:
+    def reciprocal_vectors(self) -> NDArray:
         "Primitive vectors of the reciprocal vectors stored row-wise, in inverse length units"
         return self._reciprocal_vectors
     
@@ -45,7 +48,7 @@ class CrystalLattice:
         self._lattice_vectors = (2 * np.pi) * (self._reciprocal_vectors.T @ np.linalg.inv(g))
 
     @property
-    def lattice_vectors(self) -> np.ndarray:
+    def lattice_vectors(self) -> NDArray:
         "Primitive lattice vectors stored column-wise, in length units"
         return self._lattice_vectors
     
@@ -55,34 +58,34 @@ class CrystalLattice:
         # Note: if d < n (say, 2D graphene in 3D space), direct inversion of lattice_vectors is impossible
         self._reciprocal_vectors = (2 * np.pi) * np.linalg.inv(self.metric_tensor()) @ self._lattice_vectors.T
 
-    def crystal_dimension(self) -> np.ndarray:
+    def crystal_dimension(self) -> int:
         "Returns d, the dimensionality of the crystal (e.g., 1 for polyacetylene, 2 for graphene, 3 for graphite)"
         return self._lattice_vectors.shape[1]
 
-    def target_space_dimension(self) -> np.ndarray:
+    def target_space_dimension(self) -> int:
         "Returns n, the dimensionality of space the crystal is embedded into. N.B.: n >= crystal_dimension()"
         return self._lattice_vectors.shape[0]
 
-    def fractional_coords_to_real_vector(self, coords: Sequence) -> np.ndarray:
+    def fractional_coords_to_real_vector(self, coords: Sequence) -> NDArray[np.float]:
         "Transforms a list of d coordinates x_i to an nD vector x_i \\vec{e}_i in real space, where \\vec{e}_i are the primitive vectors"
         return self._lattice_vectors.dot(coords)
 
-    def fractional_coords_to_reciprocal_vector(self, coords: Sequence) -> np.ndarray:
+    def fractional_coords_to_reciprocal_vector(self, coords: Sequence) -> NDArray[np.float]:
         "Transforms a list of d coordinates k_i to an nD vector k_i \\vec{f}_i in the reciprocal space with primitive vectors \\vec{f}_i"
         return np.dot(coords, self._reciprocal_vectors)
 
-    def real_vector_to_fractional_coords(self, x: Sequence) -> np.ndarray:
+    def real_vector_to_fractional_coords(self, x: Sequence) -> NDArray[np.float]:
         '''Transforms an nD vector \\vec{x} in real space into its d coordinates in the primitive vector basis. 
         Note that if d < n and \\vec{x} does not lie in the crystal plane, the out-of-plane coordinates are lost'''
         return (0.5 / np.pi) * self._reciprocal_vectors.dot(x)
 
-    def reciprocal_vector_to_fractional_coords(self, k: Sequence) -> np.ndarray:
+    def reciprocal_vector_to_fractional_coords(self, k: Sequence) -> NDArray[np.float]:
         '''Transforms an nD momentum vector \\vec{k} in space into its d coordinates in the reciprocal vector basis. 
         Note that if d < n and \\vec{k} does not lie in the crystal plane, the out-of-plane coordinates are lost.
         '''
         return (0.5 / np.pi) * np.dot(k, self._lattice_vectors)
     
-    def project_onto_crystal(self, vec: Sequence[float]) -> np.ndarray:
+    def project_onto_crystal(self, vec: Sequence[float]) -> NDArray[np.float]:
         "Project an arbitrary vector onto the crystal plane (if it is, e.g. two-dimensional in a 3D space)"
         if self.target_space_dimension() == self.crystal_dimension():
             return np.array(vec)     # Essentially nothing to project
@@ -97,8 +100,64 @@ class CrystalLattice:
         '''
         if format == 'jdftx.dft_outfile':
             self._load_jdftx_dft_outfile(filename)
+        elif format == 'yaml':
+            with open(filename, 'rt') as f:
+                self.initialize_from_dictionary(f, yaml.SafeLoader)
         else:
             raise ValueError(f'CrystalLattice.load() does not support format {format}')
+    
+    def initialize_from_dictionary(self, d: dict):
+        '''Initialize the lattice vectors from a dictionary containing their Cartesian components 
+        or other information, such as length units.
+        '''
+        # Length units for lattice vectors
+        lv_units = d.get('lattice-vectors-units', 'Angstrom')
+        units_error = ValueError('In CrystalLattice.initialize_from_dictionary(): ' +
+                                 'lattice-vectors-units should be formatted as <Len> Bohr|Angstrom')
+        units_supported = { 'Angstrom': units.Angstrom, 'Bohr': units.BohrRadius }
+        if not isinstance(lv_units, str):
+            raise units_error
+        if lv_units in units_supported:
+            lv_units = units_supported[lv_units]
+        else:
+            try:
+                lv_units = utils.float_with_units(lv_units, allowed_units=units_supported.keys())
+            except:
+                raise units_error
+        
+        if 'lattice-vectors.Cartesian' in d:
+            try:
+                lv_components = d['lattice-vectors.Cartesian']
+                assert(isinstance(lv_components, list))
+                for lv in lv_components:
+                    assert(isinstance(lv, list))
+                    for x in lv:
+                        assert(isinstance(x, float) or isinstance(x, int))
+                self.lattice_vectors = lv_units * np.array(lv_components, dtype=float)
+            except:
+                raise ValueError('In CrystalLattice.initialize_from_dictionary(): ' +
+                                 'lattice-vectors.Cartesian should be a nested list of numbers')
+        
+        lv_components = []
+        for v in ['a', 'b', 'c']:
+            if v + '.Cartesian' in d:
+                if 'lattice-vectors.Cartesian' in d:
+                    raise ValueError('In CrystalLattice.initialize_from_dictionary(): ' +
+                                     f'conflicting lattice-vectors.Cartesian and {v}.Cartesian statements')
+                try:
+                    lv_components.append(d[v + '.Cartesian'])
+                    if isinstance(lv_components[-1], str):
+                        lv_components[-1] = list(float(x) for x in lv_components[-1].split())
+                    else:
+                        assert(isinstance(lv_components[-1], list))
+                        for x in lv_components[-1]:
+                            assert(isinstance(x, float) or isinstance(x, int))        
+                except:
+                    raise ValueError('In CrystalLattice.initialize_from_dictionary(): ' +
+                                     f'{v}.Cartesian should be a list of numbers')
+        if lv_components != []:
+            self.lattice_vectors = lv_units * np.array(lv_components, dtype=float).T
+
 
     def _load_jdftx_dft_outfile(self, filename: str, occurrence: int = 0):
         '''A branch of load() function for JDFTx output files of DFT calculations. 
@@ -132,6 +191,17 @@ class CrystalLattice:
                     else:
                         lattice_vectors.append([float(x) * units.BohrRadius for x in ln.split()[1:4]])
         self.lattice_vectors = lattice_vectors
+    
+    def __str__(self) -> str:
+        s = 'CrystalLattice('
+        if not self._lattice_vectors is None:
+            vec_str = []
+            for i in range(self._lattice_vectors.shape[1]):
+                vec_str.append(['a', 'b', 'c'][i] + '=' + 
+                               utils.nparr2str(self._lattice_vectors[:,i] / units.Angstrom, prec=2, fmt='fixed')
+                              )
+            s += ', '.join(vec_str)
+        return s + ')'
 
 
 
@@ -139,14 +209,12 @@ class CrystallineHalfSpace(CrystalLattice):
     '''Encapsulates a periodic Bravais lattice filling a d-dimensional half-space (d=1,2,3) 
     embedded into the n-dimensional target space (n >= d), as well as the corresponding reciprocal space'''
 
-    _lattice_vectors: np.ndarray       #: d lattice vectors as columns of a matrix (shape = (n,d))
-    _reciprocal_vectors: np.ndarray    #: d reciprocal vectors as rows of matrix (shape = (d,n))
-    boundary_plane: Union[List[int], np.ndarray]   #: either (integer) Miller indices or frac. coords of \vec{n} in the reciprocal basis
+    boundary_plane: Union[List[int], NDArray[np.float]]   #: either (integer) Miller indices or frac. coords of \vec{n} in the reciprocal basis
 
 
     def __init__(self, *, 
                  lattice_vectors:        Sequence[float]      = np.identity(3, dtype=float), 
-                 boundary_plane_normal:  Optional[np.ndarray] = None,
+                 boundary_plane_normal:  Optional[NDArray[np.float]] = None,
                  boundary_plane_indices: Optional[List[int]]  = None
                 ):
         '''Constructs a CrystallineHalfSpace object with the following properties:
@@ -154,7 +222,7 @@ class CrystallineHalfSpace(CrystalLattice):
             boundary_plane_normal:  an outward normal vector to the boundary [optional],
             boundary_plane_indices: Miller indices [h,k,l] of the boundary plane [optional]
         '''
-        super().__init__(lattice_vectors)
+        super().__init__(lattice_vectors=lattice_vectors)
         if boundary_plane_normal != None:
             self.boundary_plane = self.reciprocal_vector_to_fractional_coords(boundary_plane_normal)
         elif boundary_plane_indices != None:
@@ -172,7 +240,7 @@ class CrystallineHalfSpace(CrystalLattice):
         return isinstance(self.boundary_plane, list) 
                # and list(map(type, self.boundary_plane)) == [int] * len(self.boundary_plane)
 
-    def boundary_normal(self) -> np.ndarray:
+    def boundary_normal(self) -> NDArray[np.float]:
         "Returns a unit n-dimensional vector describing the outer normal to the crystal boundary"
         return normalize(self.fractional_coords_to_reciprocal_vector(self.boundary_plane))
         
@@ -190,7 +258,7 @@ class CrystallineHalfSpace(CrystalLattice):
         return self.boundary_plane
 
 
-    def boundary_lattice_vectors(self) -> np.ndarray:
+    def boundary_lattice_vectors(self) -> NDArray:
         '''Find the shortest real lattice vectors, G in 2D and G_1, G_2 in 3D, that connect
         the lattice points lying at the boundary. In other words, these vectors are the periods 
         of the boundary of the semi-infinite crystal. 
@@ -227,6 +295,44 @@ class CrystallineHalfSpace(CrystalLattice):
         If the boundary plane is given in terms of the Miller indices, a rational vector is retured; otherwise a real-valued one.
         '''
         return np.array(self.boundary_plane)  # Just that easy!..
+    
+    def initialize_from_dictionary(self, d: dict):
+        '''Initialize the lattice vectors from a dictionary containing their Cartesian components 
+        or other information, such as length units.
+        '''
+        super().initialize_from_dictionary(d)
+        if 'boundary_normal.Cartesian' in d:
+            try:
+                n_components = d['boundary_normal.Cartesian']
+                if isinstance(n_components, str):
+                    n_components = list(float(x) for x in n_components.split())
+                else:
+                    assert(isinstance(n_components, list))
+                    for x in n_components:
+                        assert(isinstance(x, float) or isinstance(x, int))
+                self.boundary_plane = utils.normalize(np.array(n_components, dtype=float))
+                assert(self.boundary_plane.shape[0] == self.crystal_dimension())
+            except:
+                raise ValueError('In CrystallineHalfSpace.initialize_from_dictionary(): ' +
+                                 'boundary_normal.Cartesian should be a list of numbers')
+        if 'Miller_indices' in d:
+            if 'boundary_normal.Cartesian' in d:
+                raise ValueError('In CrystallineHalfSpace.initialize_from_dictionary(): ' +
+                                 'conflicting boundary_normal and Miller_indices statements')
+            try:
+                hkl = d['Miller_indices']
+                if isinstance(hkl, str):
+                    hkl = list(int(n) for n in hkl.split())
+                else:
+                    assert(isinstance(hkl, list))
+                    for n in hkl:
+                        assert(isinstance(n, int))
+                self.boundary_plane = list(hkl)
+                assert(len(self.boundary_plane) == self.crystal_dimension())
+            except:
+                raise ValueError('In CrystallineHalfSpace.initialize_from_dictionary(): ' +
+                                 'Miller_indices should be a list of integers')
+        
 
 
 if __name__ == '__main__':

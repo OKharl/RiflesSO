@@ -26,7 +26,7 @@ class AdiabaticReflectionSolver(ReflectionSolver):
     E_tolerance: float                      # Energy tolerance for finding the final state with E_final = E_initial
 
     def __init__(self, *, params: Optional[dict] = None, task: Optional[ReflectionTask] = None):
-        super().__init__(params, task)
+        super().__init__(params=params, task=task)
         self.z_cutoff_lattice_units = 25.0
         self.dq = 0.001
         self.E_tolerance = 0.0001 * units.eV
@@ -63,7 +63,7 @@ class AdiabaticReflectionSolver(ReflectionSolver):
             dq = -self.dq            # To be chosen in a smarter, adaptive way in what follows
             propagated_state = t.electronic_structure.propagate_band_in_BZ(state, k_in + (q + dq) * e_q)
             z_next = t.boundary_potential.potential_inv_function(E_in - propagated_state.E)
-            phase += np.dot(k_in + (q + 0.5 * dq) * e_q, (z_next - z) * n_Cartesian)
+            #phase += np.dot(k_in + (q + 0.5 * dq) * e_q, (z_next - z) * n_Cartesian)
             state, z, q = propagated_state, z_next, q + dq
         # [UNFINISHED] Correct q to get the energy equal to E_in
         # We need E_n(q_corr) = E_in, but are having E(q) instead, thus, q_corr ~ q + dq, where
@@ -77,4 +77,7 @@ class AdiabaticReflectionSolver(ReflectionSolver):
                                                                )
         
         # In the adiabatic regime, there is only one final state with P = 1
-        return {(math.exp(1.0j * phase), state)}
+        return {(np.exp(1.0j * phase), state)}
+
+    def __str__(self) -> str:
+        return f'{type(self).__name__}(E_tolerance={self.E_tolerance / units.eV: <.1g}eV, dq={self.dq: <.1g})'

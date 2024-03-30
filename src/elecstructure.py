@@ -9,15 +9,14 @@
 # for further merging with R.Sundararaman's qimpy project.
 # =================================================================================================
 
-from typing import Optional, Sequence, List, Tuple, Set, Union
+from typing import Optional, Sequence, List, Tuple, Set, Union, Type
+from numpy.typing import NDArray
 from abc import ABC, abstractmethod
 import math
 import numpy as np
-from scipy.optimize import root_scalar
-from lattice import CrystalLattice, CrystallineHalfSpace
-import units
-from .utils import normalize
 
+from .lattice import CrystalLattice
+from . import units
 
 # -------------------------------------------------------------------------------------------------
 # Bloch states further allowed to be adiabatically transported across the Brillouin zone
@@ -28,11 +27,11 @@ class BlochState:
     with crystal momentum \\vec{k} in BZ and belonging to a band number n.
     The spin quantum number, if any, is assumed to be included into n.
     '''
-    k_frac:    np.ndarray     # Crystal momentum in fractional coordinates
-    n:         int            # Band number
-    E:         float          # Energy, in ergs
-    u:         np.ndarray     # Bloch wave function, a normalized complex column vector of H_band(k)
-    v_band:    np.ndarray     # A Cartesian band velocity vector
+    k_frac:    NDArray[np.float]    # Crystal momentum in fractional coordinates
+    n:         int                  # Band number
+    E:         float                # Energy, in ergs
+    u:         NDArray[np.complex]  # Bloch wave function, a normalized complex column vector of H_band(k)
+    v_band:    NDArray[np.float]    # A Cartesian band velocity vector
     
     lattice:   CrystalLattice  # A reference to the lattice for which the electronic structure was found
 
@@ -62,18 +61,18 @@ class BlochState:
         else:
             self.k_frac = np.array(k_frac, dtype=float)
         self.n, self.E = n, E
-        self.u = np.array(u) if u else None # dtype=complex)
-        self.v_band = np.array(v_band, dtype=float) if v_band else None
+        self.u = None if u is None else np.array(u) # dtype=complex)
+        self.v_band = None if v_band is None else np.array(v_band, dtype=float)
 
     @property
-    def k_cart(self) -> np.ndarray:
+    def k_cart(self) -> NDArray[np.float]:
         "The crystal momentum in Cartesian coordinates"
         if not self.lattice:
             raise ValueError('To access a Cartesian k vector of a BlochState, the latter should be associated with a lattice')
         return self.lattice.fractional_coords_to_reciprocal_vector(self.k_frac)
     
     @k_cart.setter
-    def k_cart(self, k_cart_value: Sequence[float]) -> np.ndarray:
+    def k_cart(self, k_cart_value: Sequence[float]) -> NDArray[np.float]:
         "The crystal momentum in Cartesian coordinates"
         if not self.lattice:
             raise ValueError('To access a Cartesian k vector of a BlochState, the latter should be associated with a lattice')
@@ -86,19 +85,19 @@ class BlochState:
         return np.dot(self.v_band, self.lattice.boundary_normal())
 
     # For backward compatibility with a tuple of the state's properties
-    def as_tuple(self) -> Tuple[np.ndarray, int, float, np.ndarray, np.ndarray]:
-        "Returns a tuple representation in the form (\\vec{k}_fractional, n, E, chi, v_band)"
+    def as_tuple(self) -> Tuple[NDArray[np.float], int, float, NDArray[np.complex], NDArray[np.float]]:
+        "Returns a tuple representation in the form (\\vec{k}_fractional, n, E, u, v_band)"
         return (self.k_frac, self.n, self.E, self.u, self.v_band)
     
-    def __getitem__(self, i: int) -> np.ndarray | int | float:
+    def __getitem__(self, i: int) -> Union[NDArray, int, float]:
         '''Returns a state property number i, corresponding to the indices in a tuple
-        (\\vec{k}_fractional, n, E, chi, v_band). If the field is not set, returns None.
+        (\\vec{k}_fractional, n, E, u, v_band). If the field is not set, returns None.
         '''
         return self.as_tuple()[i]    # A dummy implementation for compatibility
     
-    def __setitem__(self, i: int, field_value: Sequence[float|complex] | int | float) -> None:
+    def __setitem__(self, i: int, field_value: Union[Sequence[float], Sequence[complex], int, float]) -> None:
         '''Assigns a new value to a state property number i, corresponding to the indices in a tuple
-        (\\vec{k}_fractional, n, E, chi, v_band).
+        (\\vec{k}_fractional, n, E, u, v_band).
         '''
         if i == 0:
             self.k_frac = np.array(field_value, dtype=float)
@@ -107,7 +106,7 @@ class BlochState:
         elif i == 2:
             self.E = float(field_value)
         elif i == 3:
-            self.chi = np.array(field_value) # dtype=complex
+            self.u = np.array(field_value) # dtype=complex
         elif i == 4:
             self.v_band = np.array(field_value, dtype=float)
         else:
@@ -127,6 +126,9 @@ class ElectronicStructure(ABC): # abstract class
 
     lattice: CrystalLattice                     #: The underlying lattice parameters
 
+    # Derived electronic structure classes supported by from_dictionary() method
+    estructure_types = { 'Wannierized': 'WannierElectronicStructure' }
+
     def __init__(self, *, lattice: CrystalLattice = None): 
         self.lattice = lattice
 
@@ -134,10 +136,40 @@ class ElectronicStructure(ABC): # abstract class
         "Load or initialize the electronic structure with list of parameters (or data files)"
         pass
 
+    @staticmethod
+    def from_dictionary(d: dict) -> Type['ElectronicStructure']:
+        '''Create a new electronic structure instance and initialize its parameters from a dictionary.
+        The dictionary fields used are `type` (which should be among the `estructure_types`) 
+        and the parameter fields that are required by the selected solver method.
+        '''
+        if 'type' not in d or d['type'] not in ElectronicStructure.estructure_types:
+            raise ValueError('In ElectronicStructure.from_dictionary(): unknown electronic structure data type or no type specified')
+        cls = ElectronicStructure.estructure_types[d['type']] # Should be a type or a str
+        if isinstance(cls, type):
+            struc = cls()
+        elif isinstance(cls, str) and cls in globals():
+            struc = globals()[cls]()   # A kind of Java-reflection-like instantiation by name
+        else:
+            raise ValueError('In ElectronicStructure.from_dictionary(): unknown electronic structure class')
+        struc.initialize_from_dictionary(d)
+        return struc
+    
+    def initialize_from_dictionary(self, d: dict) -> None:
+        '''Initialize electronic structure from a set of key-value pairs d, e.g., one retrieved from 
+        a configuration file
+        '''
+        pass
+
+    def __str__(self) -> str:
+        s = f'{type(self).__name__}('
+        if not self.lattice is None:
+            s += f'lattice={self.lattice}'
+        return s + ')'
+
     @abstractmethod
-    def electronic_states_BZ(self, k_fractional: np.ndarray, *, 
+    def electronic_states_BZ(self, k_fractional: NDArray[np.float], *, 
                              return_value: str = 'eigenstates'
-                            ) -> Union[List[BlochState], Tuple[List[BlochState], np.ndarray]]:
+                            ) -> Union[List[BlochState], Tuple[List[BlochState], NDArray]]:
         '''Find the electronic states for a k vector defined by its fractional coordinates.
         The bands are listed in the ascending-energy order. If `return_value` == "eigenstates",
         only the states are returned; if `return_value` == 'eigenstates_Hband', then a 2-tuple
@@ -146,7 +178,7 @@ class ElectronicStructure(ABC): # abstract class
         pass
 
 
-    def propagate_band_in_BZ(self, state_k: BlochState, kprime_frac: np.ndarray) -> list:
+    def propagate_band_in_BZ(self, state_k: BlochState, kprime_frac: NDArray[np.float]) -> list:
         '''For a state_k = (\\vec{k}, n, E_n, u_n, v_n) with crystal momentum \\vec{k}, 
         find a state corresponding to the same band at a nearby momentum \\vec{kprime_frac}.
         Both momenta are given in fractional coordinates, and are assumed to be sufficiently close,
@@ -199,7 +231,7 @@ class ElectronicStructure(ABC): # abstract class
             raise NotImplementedError(f'In ElectronicStructure.propagate_band_in_BZ(): unknown _implementation_version_ = {_implementation_version_}')
         
 
-    def propagate_band_in_energy(self, state_k: BlochState, Eprime: float, deltak_direction: np.ndarray, 
+    def propagate_band_in_energy(self, state_k: BlochState, Eprime: float, deltak_direction: NDArray[np.float], 
                                  options: dict = {'E_tolerance': 0.0001 * units.eV, 'max_iterations': 50}
                                 ) -> BlochState:
         '''For a state_k = (\\vec{k}, n, E_n, u_n, v_n) with crystal momentum \\vec{k}, 
@@ -244,8 +276,8 @@ class WannierElectronicStructure(ElectronicStructure):
     classes.
     '''
 
-    R_points: np.ndarray[int]                     #: A list of \vec{R} vectors for each Wannier function, in "fractional" real-space coordinates (each \vec{R} is stored row-wise)
-    H_wannier: np.ndarray[Union[float, complex]]  #: A matrix <w_0|H|w_R> for all Wannier functions 
+    R_points: NDArray[np.int]                        #: A list of \vec{R} vectors for each Wannier function, in "fractional" real-space coordinates (each \vec{R} is stored row-wise)
+    H_wannier: NDArray[Union[np.float, np.complex]]  #: A matrix <w_0|H|w_R> for all Wannier functions 
 
     def load(self, **kwargs):
         '''Load or initialize the electronic structure with list of parameters (or data files).
@@ -260,8 +292,32 @@ class WannierElectronicStructure(ElectronicStructure):
             return self.load_jdftx_wannierized(**kwargs)
         else:
             raise ValueError(f'In WannierElectronicStructure.load(): unknown format "{fmt}"')
+    
+    def __str__(self) -> str:
+        s = super().__str__()
+        if s[-1] != ')' or self.H_wannier is None: 
+            return s
+        else:
+            return s[:-1] + f', nbands={self.H_wannier.shape[1]})'
+    
+    def initialize_from_dictionary(self, d: dict) -> None:
+        '''Initialize electronic structure from a set of key-value pairs d, e.g., one retrieved from 
+        a configuration file.
+        '''
+        type = d.get('type', 'Wannierized')
+        format = d.get('format', 'jdftx')
+        dft_outfile  = d.get('filename.dft-output', None)
+        wannier_stem = d.get('filename.wannier-stem', None)
+        if type != 'Wannierized':
+            raise ValueError(f'In WannierElectronicStructure.initialize_from_dictionary: unknown data type {type}')
+        if format == 'jdftx':
+            self.load_jdftx_wannierized(format='file.jdftx.wannierized',
+                                        dft_outfile=dft_outfile, wannier_stem=wannier_stem)
+        else:
+            raise ValueError(f'In WannierElectronicStructure.initialize_from_dictionary: unsupported data format {format}')
         
-    def load_jdftx_wannierized(self, *, 
+    def load_jdftx_wannierized(self, *,
+                               lattice_vectors: Optional[NDArray] = None,
                                dft_stem: Optional[str] = None,
                                dft_outfile: Optional[str] = None,
                                wannier_stem: Optional[str] = None,
@@ -282,33 +338,38 @@ class WannierElectronicStructure(ElectronicStructure):
         # 0. Retrieve/constuct necessary filenames
         try:
             _dft_outfile = dft_outfile if dft_outfile else dft_stem + '.out'
-            _wannier_cellmap_file = wannier_cellmap_file if wannier_stem else wannier_stem + '.mlwfCellMap'
+            _wannier_cellmap_file = wannier_cellmap_file if wannier_cellmap_file else wannier_stem + '.mlwfCellMap'
             _wannier_cellweights_file = wannier_cellweights_file if wannier_cellweights_file else wannier_stem + '.mlwfCellWeights'
             _wannier_Hamiltonian_file = wannier_Hamiltonian_file if wannier_Hamiltonian_file else wannier_stem + '.mlwfH'
         except TypeError as e:
             raise ValueError('In WannierElectronicStructure.load_jdftx_wannierized(): either a common filename stem ' + 
                                 'should be specified as dft_stem, or explicit names for each input file') 
         # 1. Get the lattice vectors
-        with open(_dft_outfile, 'rt') as f:
-            while True: 
-                ln = f.readline()
-                if not ln:
-                    break
-                ln = ln.strip()
-                if not ln.startswith('---') or not ln.endswith('---') or 'INITIALIZING THE GRID' not in ln.upper():
-                    continue
-                # Parse the lattice vectors block
-                ln = f.readline()
-                if ln.split() != ['R', '=']:
-                    raise ValueError('In WannierElectronicStructure.load_jdftx_wannierized(): unknown format of lattice vectors in DFT output file')
-                lattice_vectors = []
-                while True:
-                    ln = f.readline().strip()
-                    if not ln.startswith('[') or not ln.endswith(']'):
+        if lattice_vectors != None:
+            _lattice_vectors = np.array(lattice_vectors, dtype=float)
+        else:
+            with open(_dft_outfile, 'rt') as f:
+                while True: 
+                    ln = f.readline()
+                    if not ln:
                         break
-                    lattice_vectors.append([float(x) * units.BohrRadius for x in ln.split()[1:-1]])
-                self.lattice.lattice_vectors = np.array(lattice_vectors)
-                break
+                    ln = ln.strip()
+                    if not ln.startswith('---') or not ln.endswith('---') or 'INITIALIZING THE GRID' not in ln.upper():
+                        continue
+                    # Parse the lattice vectors block
+                    ln = f.readline()
+                    if ln.split() != ['R', '=']:
+                        raise ValueError('In WannierElectronicStructure.load_jdftx_wannierized(): unknown format of lattice vectors in DFT output file')
+                    _lattice_vectors = []
+                    while True:
+                        ln = f.readline().strip()
+                        if not ln.startswith('[') or not ln.endswith(']'):
+                            break
+                        _lattice_vectors.append([float(x) * units.BohrRadius for x in ln.split()[1:-1]])
+                    _lattice_vectors = np.array(_lattice_vectors, dtype=float)
+        if self.lattice == None:
+            self.lattice = CrystalLattice(lattice_vectors=_lattice_vectors)
+        self.lattice.lattice_vectors = np.array(_lattice_vectors)
         # 2. Retrieve R-points for which Wannier functions are present, as well as the k-points
         self.R_points = np.loadtxt(_wannier_cellmap_file)[:, 0:3].astype(int)  # Wannier \vec{R} vectors in frac. coords
         wannier_weights = np.fromfile(_wannier_cellweights_file)
@@ -335,9 +396,9 @@ class WannierElectronicStructure(ElectronicStructure):
         self.H_wannier = units.Hartree * wannier_weights * H_reduced[idx_reduced]
         
     
-    def electronic_states_BZ(self, k_fractional: np.ndarray, *, 
+    def electronic_states_BZ(self, k_fractional: NDArray[np.float], *, 
                              return_value: str = 'eigenstates'
-                            ) -> Union[List[BlochState], Tuple[List[BlochState], np.ndarray]]:
+                            ) -> Union[List[BlochState], Tuple[List[BlochState], NDArray]]:
         '''Find the electronic states for a k vector defined by its fractional coordinates.
         The bands are listed in the ascending-energy order. If `return_value` == "eigenstates",
         only the states are returned; if `return_value` == 'eigenstates_Hband', then a 2-tuple
@@ -349,11 +410,11 @@ class WannierElectronicStructure(ElectronicStructure):
         H_k = np.tensordot(exp_ikR, self.H_wannier, axes=1)
         gradH_k = 1.0j * np.tensordot(R_points_cartesian.T * exp_ikR[None,:], self.H_wannier, axes=1)
         # 2. Find the bands and their band velocities
-        E, chi = np.linalg.eigh(H_k)    # N.B.: the eigenvalues are in ascending-energy order
+        E, u = np.linalg.eigh(H_k)    # N.B.: the eigenvalues are in ascending-energy order
         dim = gradH_k.shape[0]
         nbands = E.shape[0]
-        v_band = [(1.0 / units.hbar) * chi[:,n].conj().dot(gradH_k.dot(chi[:,n]).T).real for n in range(nbands)]
-        eigenstates = [BlochState(k_frac=k_fractional, n=n, E=E[n], u=chi[:,n], v_band=v_band[n], lattice=self.lattice) 
+        v_band = [(1.0 / units.hbar) * u[:,n].conj().dot(gradH_k.dot(u[:,n]).T).real for n in range(nbands)]
+        eigenstates = [BlochState(k_frac=k_fractional, n=n, E=E[n], u=u[:,n], v_band=v_band[n], lattice=self.lattice) 
                        for n in range(nbands)
                       ]
         if return_value == 'eigenstates':

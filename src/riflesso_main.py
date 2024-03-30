@@ -12,7 +12,8 @@
 # for further merging with R.Sundararaman's qimpy project.
 # =================================================================================================
 
-from typing import Optional, List, Tuple, Set, Any
+from typing import Optional, List, Tuple, Set, Any, Union, Sequence, IO, Type
+from numpy.typing import NDArray
 from abc import ABC
 import math
 import numpy as np
@@ -24,11 +25,9 @@ from argparse import ArgumentParser
 from .lattice import CrystallineHalfSpace
 from . import units
 from .utils import timeit, normalize, nparr2str
-from .elecstructure import ElectronicStructure, WannierElectronicStructure, BlochState
-from .boundarypot import BoundaryPotential
-from .reflsolver import ReflectionSolver
+from .elecstructure import ElectronicStructure, BlochState
+from .boundarypot import BoundaryPotential, KinkPotential
 from .projector import KgridProjector
-
 
 class ReflectionTask:
     '''A class encapsulating calculation of a specific reflection property using a certain method/approximation,
@@ -36,21 +35,32 @@ class ReflectionTask:
     '''
     engine:                 'RiflesSO'
     lattice:                CrystallineHalfSpace
-    electronic_structure:   ElectronicStructure
-    boundary_potential:     BoundaryPotential
-    reflection_solver:      'ReflectionSolver'
-    kgrid_projector:        'KgridProjector'
+    electronic_structure:   Type[ElectronicStructure]
+    boundary_potential:     Type[BoundaryPotential]
+    reflection_solver:      Type['ReflectionSolver']
+    kgrid_projector:        Type['KgridProjector']
 
     calctype:               str         # Calculation type: 'single_WF_reflection', 'all_WF_reflection'
-    k_frac:                 np.ndarray  # Fractional components of incident wave's \vec{k} vector
+    k_frac:                 NDArray[np.float]  # Fractional components of incident wave's \vec{k} vector
     in_state:               BlochState  # A state to calculate reflection of for calctype = 'single_WF_reflection'
     
     # The result(s) of the calculation in the format [(in_state, (A_1, out_state1), (A_2, out_state2), ...}), ...]
     calc_result:            List[Tuple[BlochState, Set[Tuple[complex, BlochState]]]] 
 
     def __init__(self, engine: 'RiflesSO', calctype: str, *, 
-                 k_frac: np.ndarray, in_state: BlochState):
-        pass
+                 k_frac: Optional[NDArray[np.float]] = None, 
+                 in_state: Optional[BlochState] = None):
+        self.engine = engine
+        self.calctype = calctype
+        self.lattice = engine.lattice
+        self.electronic_structure = engine.electronic_structure
+        self.boundary_potential = engine.boundary_potential
+        self.reflection_solver = engine.reflection_solver
+        self.kgrid_projector = engine.kgrid_projector
+        
+        self.k_frac = k_frac
+        self.in_state = in_state
+        self.calc_result = None
 
     def run(self) -> Any:
         '''Performs the configured reflectance calculation. 
@@ -70,14 +80,28 @@ class ReflectionTask:
     def result(self) -> dict:
         "Returns the result of the calculation once it is complete"
         return {'reflection_coeffs': self.calc_result}
+    
+    
 
+from .reflsolver import ReflectionSolver
 
 class RiflesSO:
     '''The main entry point of the reflectance solver toolchain. Can be initialized with 
-    command-line arguments, a YAML script, or step by step manually.
+    command-line arguments, a YAML script, or step by step manually. Typically, the chain contains
+    initialization of the electronic structure, calculation of the reflectance, and projection
+    of the latter onto a given finite momentum grid.
     '''
     
     arg_parser: ArgumentParser
+
+    lattice:                CrystallineHalfSpace
+    electronic_structure:   ElectronicStructure
+    boundary_potential:     BoundaryPotential
+    reflection_solver:      'ReflectionSolver'
+    kgrid_projector:        'KgridProjector'
+
+    log_stream:             IO
+    log_filename:           str
 
     def __init__(self, *, 
                  from_command_line: Optional[str] = None,
@@ -85,21 +109,35 @@ class RiflesSO:
                  from_yaml: Optional[Union[str, yaml.YAMLObject, dict]] = None
                 ):
         self.create_argument_parser()
+        self.log_filename = 'console'
+        self.log_stream = None
+        self.lattice = CrystallineHalfSpace(lattice_vectors = np.identity(3, dtype=float) * units.Angstrom,
+                                            boundary_plane_indices = [0, 0, 1]
+                                           )
+        self.electronic_structure = None
+        self.boundary_potential = KinkPotential(shape='kink.tanh', V_0 = 10 * units.eV, V_width = 10 * units.Angstrom)
+        self.reflection_solver = None
+        self.kgrid_projector = None
+
         if from_dict:
             self.initialize_from_dictionary(from_dict)
         elif from_yaml:
-            if from_yaml is str:
+            if isinstance(from_yaml, str):
                 with open(from_yaml, 'rt') as f:
                     yaml_dict = yaml.safe_load(f)
-            elif from_yaml is yaml.YAMLObject:
-                yaml_dict = from_yaml  # NOT SURE...
-            elif from_yaml is dict:
+            elif isinstance(from_yaml, yaml.YAMLObject):
+                yaml_dict = dict(from_yaml)  # NOT SURE...
+            elif isinstance(from_yaml, dict):
                 yaml_dict = from_yaml
-            self.initialize_from_dictionary(yaml_dict)
+            self.initialize_from_dictionary(yaml_dict['riflesso'])
         elif from_command_line:
             self.initialize_from_command_line(from_command_line)
         else:
             self.initialize_from_command_line('-o riflesso')
+
+    def __del__(self):
+        if self.log_filename != 'console' and self.log_stream is not None:
+            self.log_stream.close()
 
     def run(self):
         pass
@@ -107,80 +145,63 @@ class RiflesSO:
     def initialize_from_command_line(self, command_line: Optional[str] = None):
         if command_line:
             self.arg_parser.parse(command_line)
-            # TODO: process the arguments
-            # ...
+            
+    
+    def log(self, msg: str, *args, **kwargs):
+        if self.log_filename == 'console':
+            print(msg, *args, **kwargs)
+        elif self.log_filename and self.log_stream is not None:
+            print(msg, file=self.log_stream, *args, **kwargs)
 
     def initialize_from_dictionary(self, d: dict):
-        # TODO: process the dict fields
-        # ...
-        pass
+        if 'lattice' in d:
+            d_lattice = dict(d['lattice'])
+            if 'boundary-normal.Cartesian' not in d_lattice and 'Miller_indices' not in d_lattice:
+                # Add a dummy normal vector, otherwise a CrystallineHalfSpace object may not initialize correctly
+                d_lattice['Miller_indices'] = [0, 0, 1]
+            self.lattice = CrystallineHalfSpace()
+            self.lattice.initialize_from_dictionary(d_lattice)
+            self.log('Crystal lattice initialized with the following primitive vectors [in Angstroms]:\n\t' + 
+                     '\n\t'.join(['a', 'b', 'c'][i] + ' = ' 
+                                 + nparr2str(self.lattice.lattice_vectors[:,i] / units.Angstrom) 
+                                 for i in range(self.lattice.crystal_dimension())
+                                ),
+                     sep=''
+                    )
+        if 'electronic-structure' in d:
+            self.electronic_structure = ElectronicStructure.from_dictionary(d['electronic-structure'])
+            self.electronic_structure.lattice = self.lattice
+            self.log(f'Electronic structure initialized: {self.electronic_structure}')
+        if 'boundary-potential' in d:
+            self.boundary_potential = BoundaryPotential.from_dictionary(d['boundary-potential'])
+        elif self.boundary_potential is None: # Create a default one
+            self.boundary_potential = KinkPotential(shape='tanh', V_0 = 10 * units.eV, V_width = 10 * units.Angstrom)
+        self.log(f'Boundary potential fixed: {self.boundary_potential}')
+        if 'solver' in d:
+            self.reflection_solver = ReflectionSolver.from_dictionary(d['solver'])
+            self.log(f'Reflection solver initialized: {self.reflection_solver}')
+        # TODO: parse other keywords
+
 
     def create_argument_parser(self):
         "Create a parser object for potential scanning of the command line passed to RiflesSO"
         self.arg_parser = ArgumentParser(prog='RiflesSO', 
                                          description='ab initio reflectance solver for crystalline materials')
-        self.arg_parser.add_argument('-i', '--input-yaml', type='str', 
+        self.arg_parser.add_argument('-i', '--input-yaml', type=str, 
                                      help='Input YAML filename describing the tasks to be done', required=False)
-        self.arg_parser.add_argument('-o', '--output-stem', type='str', 
+        self.arg_parser.add_argument('-o', '--output-stem', type=str, 
                                      help='Stem for output files, e.g., those with the calculated reflectances', required=False)
 
 
 
-
-
-class Reflector:
-    '''
-    The main reflectance solver class implementing various approaches/approximations and band structure import.
-    '''
-    
-    lattice: CrystallineHalfSpace        #: stores the boundary and lattice vectors
-    boundary_potential: Tuple[str, ...]  #: boundary potential type and its params, tanh supported so far
-
-    def __init__(self, *, 
-                 lattice_vectors: Sequence[Sequence[float]] = np.identity(3)
-                 ):
-        self.lattice = CrystallineHalfSpace(lattice_vectors=lattice_vectors)
-        self.boundary_potential = ('tanh', 10.0 * units.eV, 25.0 * units.Angstrom)
-    
-
-    def reflect_wavefunction(self, incident_state: Tuple) -> Tuple[float, tuple]:
-        '''
-        For an incident pure state incident_state = (\\vec{k}, n, E, chi, v), 
-        find the reflected states s_a = (\\vec{k}_a, n_a, E_a, chi_a, v_a) and the
-        corresponding reflection probabilities P_a. Returns a set {(P_a, s_a)}.
-        '''
-        # Version 1: 0th adiabatic approximation (to be implemented in a separate class)
-        e_q = np.array(self.lattice.boundary_potential_kdirection(), dtype=float) # this projection of \vec{k} will change
-        dk_over_dq = self.lattice.fractional_coords_to_reciprocal_vector(e_q)
-        lattice_scale = np.mean([np.linalg.norm(v) for v in self.lattice.lattice_vectors.T])
-        z_cutoff = 25.0 * lattice_scale  # Let's assume the bulk starts here rather than at z → -∞
-        z_in = -z_cutoff 
-        k_in, E_in = incident_state[0], incident_state[2] # + self.boundary_potential_value(z_in)
-        n_Cartesian = self.lattice.boundary_normal()
-        z, q, phase = z_in, 0.0, 0.0       # Further, we will work with k = k_in + q * e_q
-        state = incident_state
-        while z > -1.01 * z_cutoff:
-            dq = -0.001            # To be chosen in a smarter, adaptive way in what follows
-            propagated_state = self.propagate_band_in_BZ(state, k_in + (q + dq) * e_q)
-            z_next = self.boundary_potential_inv(E_in - propagated_state[2])
-            phase += np.dot(k_in + (q + 0.5 * dq) * e_q, (z_next - z) * n_Cartesian)
-            state, z, q = propagated_state, z_next, q + dq
-        # [UNFINISHED] Correct q to get the energy equal to E_in
-        # We need E_n(q_corr) = E_in, but are having E(q) instead, thus, q_corr ~ q + dq, where
-        # E_in - E(q) = dq * dE_n/dq = dq * hbar (v_n dk/dq) = dq * hbar (v_n * frac2cart(e_q))
-        #dq_corr = (E_in - state[2]) / (units.hbar * propagated_state[4].dot(dk_over_dq))
-        #if abs(dq_corr) < abs(dq):
-        #    state = self.propagate_band_in_BZ(state, k_in + (q + dq_corr) * e_q)
-        state = self.propagate_band_in_energy(state, E_in, e_q)
-        
-        # In fact, in the adiabatic regime, there is only one final state, and the phase is unimportant
-        return [(1.0, state)]
-
+# -------------------------------------------------------------------------------------------------
+# Tests
+# -------------------------------------------------------------------------------------------------
 
 
 if __name__ == '__main__':
     jdftx_dir = '../../jdftx_calculations/'
-    ref = Reflector()
+    ref = RiflesSO() #Reflector()
     ref.lattice = CrystallineHalfSpace(
         lattice_vectors = (5.34145 * units.BohrRadius) * np.array([[0.0, 1, 1], [1, 0, 1], [1, 1, 0]]),
         boundary_plane_indices = [1, 0, 0]
