@@ -56,5 +56,6 @@ While light in vacuum has ***two*** *polarization states*, an electron with a gi
 
 ## Authors, current status, ...
 
-The project was created by [Oleg G. Kharlanov](http://theorphys.phys.msu.ru/en/staff/kharlanov.html) (Moscow State University) in collaboration with [Yuan Ping](https://directory.engr.wisc.edu/mse/Faculty/Ping_Yuan) (Wisconsin University) and [Ravishankar Sundararaman](https://mse.rpi.edu/people/faculty/ravishankar-sundararaman) (Rensselaer Polytechnic Institute). The goal is to further merge RiflesSO with [`qimpy`](https://github.com/shankar1729/qimpy) for *ab initio* quantum transport simulation of electronic/spintronic devices; however, certain methods implemented in `RiflesSO` can be useful in their own right.
+The project was created by [Oleg G. Kharlanov](http://theorphys.phys.msu.ru/en/staff/kharlanov.html) (Moscow State University) as part of his collaboration with [Yuan Ping](https://directory.engr.wisc.edu/mse/Faculty/Ping_Yuan) (Wisconsin University) and [Ravishankar Sundararaman](https://mse.rpi.edu/people/faculty/ravishankar-sundararaman) (Rensselaer Polytechnic Institute). The principal goal initially was to further merge `RiflesSO` with [`qimpy`](https://github.com/shankar1729/qimpy) for *ab initio* quantum transport simulation of electronic/spintronic devices; however, certain methods implemented in `RiflesSO` can be useful in their own right.
+
 **The project is currently under development.**
