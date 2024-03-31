@@ -13,7 +13,7 @@ The code can be used either as a Python library or as a standalone command-line 
 ```
 Here, the `-i` (`--input-yaml`) argument is required in order to point to the YAML-formatted input script `task.yaml` listing the options of the calculation. In contrast, the `-o` (`--output-stem`) argument, defining the log filename, is optional; by default, `RiflesSO` writes its output to the console. 
 
-The input script contains such sections as `lattice`, `electronic-struture`, `solver`, `boundary-potential`, and `task`, which define which data to use as input, which physical approximations to use, and which quantities to caclulate and save. For a concrete example, see, e.g., [/tests/reflect_graphene.yaml].
+The input script contains such sections as `lattice`, `electronic-struture`, `solver`, `boundary-potential`, and `task`, which define which data to use as input, which physical approximations to use, and which quantities to caclulate and save. For a concrete example, see, e.g., [tests/reflect_graphene.yaml](tests/reflect_graphene.yaml).
 
 ## Usage: Python library
 Individual `RiflesSO` classes can be used for various operations with the *ab initio* electronic structure pre-calculated, e.g., using [JDFTx](https://jdftx.org/):
