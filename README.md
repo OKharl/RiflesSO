@@ -54,7 +54,7 @@ engine.run()
 While light in vacuum has ***two*** *polarization states*, an electron with a given crystal momentum in a crystalline semiconductor can belong to ***many*** *bands*. Photon polarization can undergo transformations at the interfaces of transparent media (see, e.g., [Brewster's angle](https://en.wikipedia.org/wiki/Brewster%27s_angle), [Birefringence](https://en.wikipedia.org/wiki/Birefringence])). Reflection of electrons, due to their more complicated band dispersion in comparison with photons, can lead to interband transitions and is in no way described by the conventional reflection law in general. In contrast, a single incident electron beam (band $n$, crystal momentum $\mathbf{k}$) gets split into a number of reflected beams with certain probabilities (or relative intensities), each of them having its own reflection angle and/or band $n'$. These relative intensities are quantified by the *reflectance*, or reflection probability $\mathcal{R}_{\mathbf{k}'n', \mathbf{k}n}$ calculated by `RiflesSO`.
 
 
-## Authors, current status, ...
+## Authors, current status, etc.
 
 The project was created by [Oleg G. Kharlanov](http://theorphys.phys.msu.ru/en/staff/kharlanov.html) (Moscow State University) as part of his collaboration with [Yuan Ping](https://directory.engr.wisc.edu/mse/Faculty/Ping_Yuan) (Wisconsin University) and [Ravishankar Sundararaman](https://mse.rpi.edu/people/faculty/ravishankar-sundararaman) (Rensselaer Polytechnic Institute). The principal goal initially was to further merge `RiflesSO` with [`qimpy`](https://github.com/shankar1729/qimpy) for *ab initio* quantum transport simulation of electronic/spintronic devices; however, certain methods implemented in `RiflesSO` can be useful in their own right.
 
