@@ -84,9 +84,8 @@ $(function() {
 <table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 class="groupheader"><a id="pub-methods" name="pub-methods"></a>
 Public Member Functions</h2></td></tr>
-<tr class="memitem:a8e1d17161d9a1f01fcd316fdbafc6e7f" id="r_a8e1d17161d9a1f01fcd316fdbafc6e7f"><td class="memItemLeft" align="right" valign="top"><a id="a8e1d17161d9a1f01fcd316fdbafc6e7f" name="a8e1d17161d9a1f01fcd316fdbafc6e7f"></a>
-&#160;</td><td class="memItemRight" valign="bottom"><b>reflect_density_matrix</b> (self, NDArray[np.complex] rho_k)</td></tr>
-<tr class="separator:a8e1d17161d9a1f01fcd316fdbafc6e7f"><td class="memSeparator" colspan="2">&#160;</td></tr>
+<tr class="memitem:a8277cc9cf4697d1c68d19f694a1538df" id="r_a8277cc9cf4697d1c68d19f694a1538df"><td class="memItemLeft" align="right" valign="top">NDArray[np.complex]&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="classsrc_1_1projector_1_1Reflector.html#a8277cc9cf4697d1c68d19f694a1538df">reflect_density_matrix</a> (self, NDArray[np.complex] rho_k)</td></tr>
+<tr class="separator:a8277cc9cf4697d1c68d19f694a1538df"><td class="memSeparator" colspan="2">&#160;</td></tr>
 </table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 class="groupheader"><a id="pub-static-attribs" name="pub-static-attribs"></a>
 Static Public Attributes</h2></td></tr>
@@ -100,7 +99,39 @@ List&#160;</td><td class="memItemRight" valign="bottom"><b>reflection_amps</b> [
 <a name="details" id="details"></a><h2 class="groupheader">Detailed Description</h2>
 <div class="textblock"><pre class="fragment">A class encapsulating reflection operations on a density matrix rho_mn(k) (diagonal in k space)
 for a fixed boundary normal vector. The k space is 
-</pre> </div><hr/>The documentation for this class was generated from the following file:<ul>
+</pre> </div><h2 class="groupheader">Member Function Documentation</h2>
+<a id="a8277cc9cf4697d1c68d19f694a1538df" name="a8277cc9cf4697d1c68d19f694a1538df"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a8277cc9cf4697d1c68d19f694a1538df">&#9670;&#160;</a></span>reflect_density_matrix()</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname"> NDArray[np.complex] reflect_density_matrix </td>
+          <td>(</td>
+          <td class="paramtype">&#160;</td>
+          <td class="paramname"><em>self</em>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">NDArray[np.complex]&#160;</td>
+          <td class="paramname"><em>rho_k</em>&#160;</td>
+        </tr>
+        <tr>
+          <td></td>
+          <td>)</td>
+          <td></td><td></td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+<pre class="fragment">Apply reflection to a density matrix rho_k (a complex array with shape = (Nk, Nbands, NBands)).
+Returns an array of the same shape, in which the incident-state contirbutions of rho_k are retained, 
+and the reflected-state contibutions are constructed from the known reflection amplitudes.
+</pre> 
+</div>
+</div>
+<hr/>The documentation for this class was generated from the following file:<ul>
 <li><b>projector.py</b></li>
 </ul>
 </div><!-- contents -->
