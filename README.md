@@ -7,6 +7,8 @@ This project aims at describing reflection of charge carriers off a crystal boun
 
 The code can be used either as a Python library or as a standalone command-line tool.
 
+For a detailed introduction and documentation, see [this paper](/docs/riflesso.pdf), as well as the [docs](/docs) directory of the repository.
+
 ## Usage: Command line
 ```
     python -m riflesso -i task.yaml -o logfile
