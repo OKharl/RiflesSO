@@ -3,7 +3,7 @@ This project aims at describing reflection of charge carriers off a crystal boun
 * **various physical approximations/regimes**: quantum, quasiclassical, adiabatic, etc.;
 * **fully *ab initio* treatment of the band structure**: work with as many bands as possible beyond the quadratic-dispersion or spin-degeneracy approximations;
 * **support of boundary properties**: roughness, orientation, etc.;
-* **import of Bloch/Wannier data** from output files of [`qimpy`](https://github.com/shankar1729/qimpy) and other DFT packages.
+* **import of Bloch/Wannier data** from output files of [`JDFTx`](https://jdftx.org/) and other DFT packages.
 
 The code can be used either as a Python library or as a standalone command-line tool.
 
