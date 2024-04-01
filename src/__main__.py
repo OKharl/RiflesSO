@@ -1,5 +1,5 @@
 # =================================================================================================
-# __init__.py: main initialization module of RiflesSO package
+# __main__.py: the RiflesSO entry point when called from command line
 # -------------------------------------------------------------------------------------------------
 # A part of RiflesSO project created by Oleg Kharlanov (O.K.), 2024, 
 # for further merging with R.Sundararaman's qimpy project.
@@ -13,10 +13,7 @@ from .lattice import CrystalLattice, CrystallineHalfSpace
 from .elecstructure import ElectronicStructure, BlochState
 from .boundarypot import BoundaryPotential, KinkPotential
 from .projector import KgridProjector
-#from .reflsolver import ReflectionSolver
-#from .reflsolver_adiabatic import AdiabaticReflectionSolver
 from .riflesso_main import ReflectionTask, RiflesSO
 
-if __name__ == '__main__':
-    riflesso = RiflesSO()
-    riflesso.run()
+riflesso = RiflesSO(from_command_line='from_os')
+riflesso.run()

@@ -5,7 +5,7 @@
 # for further merging with R.Sundararaman's qimpy project.
 # =================================================================================================
 
-from typing import Sequence, List, Union, Tuple, IO, Set, Optional
+from typing import Sequence, List, Union, Tuple, IO, BinaryIO, Set, Optional
 from numpy.typing import NDArray
 import numpy as np
 from math import gcd, floor
@@ -48,6 +48,27 @@ def nparr2str(a: NDArray, prec=3, fmt='fixed', **kwargs):
         return np.array2string(a, max_line_width=256, 
                                formatter={'float_kind': fmt_func, 'complex_kind': fmt_func}, *kwargs
                               )
+
+def write_array_binary(a: NDArray, f: BinaryIO, *, dtype: Optional[np.dtype] = None):
+    '''Write an n-dimensional numpy array `a` to a binary file `f`, saving its shape as well.
+    Each array element is written as an entity of type `dtype` (if the latter is not specified,
+    `a.dtype` is used instead).
+    '''
+    t = a.dtype if dtype is None else dtype
+    dim_shape = np.hstack((a.ndim, a.shape)).astype(np.int32) # Prepended by number of dimensions
+    f.write(dim_shape.tobytes())
+    if t == a.dtype:
+        f.write(a.tobytes(order='C'))
+    else:
+        f.write(a.astype(t).tobytes(order='C'))
+
+def read_array_binary(f: BinaryIO, dtype: np.dtype) -> NDArray:
+    '''Read an n-dimensional numpy array previously written using write_array_binary() 
+    from a binary file `f`, automatically reshaping it as required.
+    '''
+    dim = np.frombuffer(f.read(4), dtype=np.int32, count=1)[0]
+    shape = np.frombuffer(f.read(4 * dim), dtype=np.int32, count=dim)
+    return np.frombuffer(f.read(np.product(shape) * dtype().itemsize), dtype=dtype).reshape(shape)
 
 # ------------------------------------------------------------------------------------------------
 # Regular expression/parsing related functions (to be refactored to a separate parser module)
@@ -170,6 +191,28 @@ def float_with_units(s: str,
 def normalize(vec: NDArray) -> NDArray:
     "Normalize an n-dimensional vector to unity "
     return vec / np.linalg.norm(vec)
+
+def plane_vectors(n: NDArray[np.float]) -> Tuple[NDArray[np.float], NDArray[np.float]]:
+    "For a normal vector `n` to a plane, return two orthonormal vectors (a, b) in this plane."
+    evals, evecs = np.linalg.eigh(np.outer(normalize(n), normalize(n)))
+    a, b = evecs[:, 0], evecs[:, 1]
+    return (a, b) if np.cross(a, b).dot(n) > 0 else (b, a)
+
+def gram_schmidt(vectors: Sequence[NDArray[np.float]]) -> List[NDArray[np.float]]:
+    '''Gram-Schmidt orthogonalization of a list of linearly independent vectors v_1, v_2, ..., v_n. 
+    Returns a list of vectors, whose length is no greater than the space dimension. 
+    Note that the vectors are stores "row-wise" in these lists.
+    '''
+    dim = vectors[0].size
+    ret = [np.array(v) for v in vectors]
+    final_vectors = []
+    for i in range(len(vectors)):
+        for j in range(i):
+            ret[i] -= ret[i].dot(ret[j]) * ret[j]
+        if np.linalg.norm(ret[i]) > 1e-10:
+            ret[i] = normalize(ret[i])
+            final_vectors.append(ret[i])
+    return final_vectors
 
 # ------------------------------------------------------------------------------------------------
 # (Diophantine) equations over integers, number theory, etc.
@@ -309,8 +352,4 @@ def snap_to_rational(x: float, deltax: float = 0.01) -> Fraction:
             return Fraction(round(x * n), n)
     # For safety
     raise ValueError('In snap_to_rational(): internal error, could not find a rational approximation')
-
-# ------------------------------------------------------------------------------------------------
-# Unit tests
-# ------------------------------------------------------------------------------------------------
 

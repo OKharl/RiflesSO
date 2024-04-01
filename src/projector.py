@@ -5,7 +5,7 @@
 # for further merging with R.Sundararaman's qimpy project.
 # =================================================================================================
 
-from typing import Optional, Sequence, Union, Type
+from typing import Optional, Sequence, Union, Type, Tuple, List
 from numpy.typing import NDArray
 import numpy as np
 
@@ -130,6 +130,28 @@ class Kgrid:
         idx_vec = np.array(np.round(np.mod(k_frac, 1) * self.npoints), dtype=int)
         return idx_vec if not scalar_index else self.point_index_vector2scalar(idx_vec)
 
+
+class Reflector:
+    '''A class encapsulating reflection operations on a density matrix rho_mn(k) (diagonal in k space)
+    for a fixed boundary normal vector. The k space is 
+    '''
+
+    # The reflection amplitudes are stored as a sparse matrix, i.e., as a list of in- and out-states.
+    # Namely, per each k in the grid and each band n, we store the in-state wave function and 
+    # the output state(s) (k_m, A_m u_m).
+    reflection_amps: List[List[Tuple[NDArray[np.float], NDArray[np.complex]]]]
+    kgrid:           Kgrid
+
+    def reflect_density_matrix(self, rho_k: NDArray[np.complex]) -> NDArray[np.complex]:
+        '''Apply reflection to a density matrix rho_k (a complex array with shape = (Nk, Nbands, NBands)).
+        Returns an array of the same shape, in which the incident-state contirbutions of rho_k are retained, 
+        and the reflected-state contibutions are constructed from the known reflection amplitudes.
+        '''
+        for ik, k in self.kgrid.kpoints(Cartesian=False):
+            for kprime, uprime in self.reflection_amps[ik]:
+                ikprime = self.kgrid.closest_point_index(kprime, Cartesian=False, scalar_index=True)
+                # TODO: transport uprime to its counterpart at the grid point
+                # ...
 
 
 class KgridProjector:

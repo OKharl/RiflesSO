@@ -24,10 +24,10 @@ from argparse import ArgumentParser
 
 from .lattice import CrystallineHalfSpace
 from . import units
-from .utils import timeit, normalize, nparr2str
+from .utils import timeit, normalize, nparr2str, plane_vectors, write_array_binary, read_array_binary
 from .elecstructure import ElectronicStructure, BlochState
 from .boundarypot import BoundaryPotential, KinkPotential
-from .projector import KgridProjector
+from .projector import KgridProjector, Kgrid
 
 class ReflectionTask:
     '''A class encapsulating calculation of a specific reflection property using a certain method/approximation,
@@ -92,22 +92,38 @@ class RiflesSO:
     of the latter onto a given finite momentum grid.
     '''
     
-    arg_parser: ArgumentParser
+    riflesso_version = '0.1'                        # The version displayed on "riflesso --version"
 
+    arg_parser:             ArgumentParser          # Parser of command-line arguments
+
+    # Parts of the toolchain
     lattice:                CrystallineHalfSpace
-    electronic_structure:   ElectronicStructure
-    boundary_potential:     BoundaryPotential
-    reflection_solver:      'ReflectionSolver'
-    kgrid_projector:        'KgridProjector'
+    electronic_structure:   Type[ElectronicStructure]
+    boundary_potential:     Type[BoundaryPotential]
+    reflection_solver:      Type['ReflectionSolver']
+    kgrid_projector:        Type['KgridProjector']
 
+    # Logging stream and filename
     log_stream:             IO
     log_filename:           str
 
+    # Type of task to be done
+    task_type:              str
+
+    # Boundary normals, for which the calculations are to be performed
+    normals:                List[Union[List[int], NDArray[np.float]]]
+    kpoint_grid:            Type[Kgrid]
+
     def __init__(self, *, 
-                 from_command_line: Optional[str] = None,
+                 from_command_line: Optional[str] = 'do_not_use',
                  from_dict: Optional[dict] = None,
                  from_yaml: Optional[Union[str, yaml.YAMLObject, dict]] = None
                 ):
+        '''Initialize a RiflesSO engine form a command line, an input YAML-formatted script, or a dictionary.
+        To use the command line of the process (i.e., `argv`), set from_command_line = None or 'from_os'.
+        As for YAML scripts, `from_yaml` can be both a parsed YAML (i.e., a dict), or a YAML filename.
+        '''
+        # Initialize defaults
         self.create_argument_parser()
         self.log_filename = 'console'
         self.log_stream = None
@@ -118,6 +134,7 @@ class RiflesSO:
         self.boundary_potential = KinkPotential(shape='kink.tanh', V_0 = 10 * units.eV, V_width = 10 * units.Angstrom)
         self.reflection_solver = None
         self.kgrid_projector = None
+        self.normals = [[1, 0, 0]]    # Just a single normal defined via Miller indices
 
         if from_dict:
             self.initialize_from_dictionary(from_dict)
@@ -129,31 +146,71 @@ class RiflesSO:
                 yaml_dict = dict(from_yaml)  # NOT SURE...
             elif isinstance(from_yaml, dict):
                 yaml_dict = from_yaml
+            else:
+                raise ValueError('In RiflesSO.__init__(): unsupported type of from_yaml parameter')
+            if 'riflesso' not in yaml_dict:
+                raise ValueError('In RiflesSO.__init__(): section "riflesso" not found in YAML file')
             self.initialize_from_dictionary(yaml_dict['riflesso'])
-        elif from_command_line:
-            self.initialize_from_command_line(from_command_line)
-        else:
-            self.initialize_from_command_line('-o riflesso')
+        elif from_command_line != 'do_not_use':
+            if from_command_line == 'from_os' or from_command_line == None:
+                self.initialize_from_command_line()
+            else:
+                self.initialize_from_command_line(from_command_line)
+            
 
     def __del__(self):
+        "Destructor of RiflesSO engine: closes the log streams"
         if self.log_filename != 'console' and self.log_stream is not None:
             self.log_stream.close()
 
     def run(self):
         pass
 
+    def set_logfile(self, filename: Optional[str] = 'console'):
+        "Set log filename, closing the previous used one if necessary"
+        if self.log_filename == filename:
+            return
+        if self.log_filename != 'console':
+            self.log_stream.close()
+        self.log_filename = filename
+        self.log_stream = None if filename == 'console' else open(filename, 'wt')
+
+    def read_input_yaml_script(self, filename: str):
+        "Input a YAML-formatted input file and initialize the parameters of RiflesSO"
+        with open(filename, 'rt') as f:
+            input_script = yaml.safe_load(f)
+            if 'riflesso' not in input_script:
+                raise ValueError('In RiflesSO.read_input_yaml_script(): section "riflesso" not found in YAML file')
+            self.initialize_from_dictionary(input_script['riflesso'])
+
     def initialize_from_command_line(self, command_line: Optional[str] = None):
-        if command_line:
-            self.arg_parser.parse(command_line)
-            
+        '''Parse command_line and initialize RiflesSO engine from the arguments in it. 
+        If `command_line` is None, use the system command line of the process instead.
+        '''
+        p = self.arg_parser
+        if command_line is None:
+            args = p.parse_args()  # Use OS's command line instead
+        else:
+            args = p.parse_args(command_line.strip())
+        if args.version:
+            print(str(self.riflesso_version))
+            return
+        if args.output_stem:
+            self.set_logfile(args.output_stem + '.log')
+        if args.input_yaml:
+            self.read_input_yaml_script(args.input_yaml)
     
     def log(self, msg: str, *args, **kwargs):
+        "Write a message to the log file or to console if the log file is not set up"
         if self.log_filename == 'console':
             print(msg, *args, **kwargs)
         elif self.log_filename and self.log_stream is not None:
             print(msg, file=self.log_stream, *args, **kwargs)
 
     def initialize_from_dictionary(self, d: dict):
+        "Initialize RiflesSO engine from a dictionary (a `riflesso` section of the YAML input script)"
+        if 'task' not in d:
+            raise ValueError('In RiflesSO.initialize_from_dictionary(): section "task" missing')
         if 'lattice' in d:
             d_lattice = dict(d['lattice'])
             if 'boundary-normal.Cartesian' not in d_lattice and 'Miller_indices' not in d_lattice:
@@ -180,6 +237,12 @@ class RiflesSO:
         if 'solver' in d:
             self.reflection_solver = ReflectionSolver.from_dictionary(d['solver'])
             self.log(f'Reflection solver initialized: {self.reflection_solver}')
+        if 'task' in d:
+            d_task = dict(d['task'])
+            if 'boundary-normals' in d_task:
+                self.normals = self.generate_normals_from_dictionary(d_task['boundary-normals'])
+                self.log(f'{len(self.normals)} boundary normal vectors generated/loaded')
+            self.task_type = d_task.get('task.type', 'reflection-coeffs')
         # TODO: parse other keywords
 
 
@@ -189,135 +252,84 @@ class RiflesSO:
                                          description='ab initio reflectance solver for crystalline materials')
         self.arg_parser.add_argument('-i', '--input-yaml', type=str, 
                                      help='Input YAML filename describing the tasks to be done', required=False)
-        self.arg_parser.add_argument('-o', '--output-stem', type=str, 
+        self.arg_parser.add_argument('-o', '--output-stem', type=str,
                                      help='Stem for output files, e.g., those with the calculated reflectances', required=False)
+        self.arg_parser.add_argument('-v', '--version', action='store_true', help='Display the version information', required=False)
 
+    def generate_normals_from_dictionary(self, d: dict) -> List[Union[NDArray[np.float], List[int]]]:
+        '''Generate a set of normal vectors (np.array[float]) or Miller indices (list[int])
+        from a section of a configuration dictionary.
+        '''
+        t = d.get('type', 'from-file')
+        if t == 'from-file':
+            if 'filename' not in d:
+                raise ValueError('In RiflesSO.generate_normals_from_dictionary(): normal file name missing')
+            fn = d['filename']
+            fmt = d.get('format', 'table.Cartesian')
+            if fmt not in {'table.Cartesian', 'table.Miller', 'binary.Cartesian'}:
+                raise ValueError('In RiflesSO.generate_normals_from_dictionary(): unknown normal file format')
+            if fmt == 'table.Cartesian':
+                normals = [normalize(n) for n in np.loadtxt(fn, dtype=float)]
+            elif fmt == 'table.Miller':
+                normals = [list(n) for n in np.loadtxt(fn, dtype=int)]
+            elif fmt == 'binary.Cartesian':
+                normals = np.load(fn, dtype=np.float64)
+                normals = [normalize(n) for n in normals.reshape(normals.size // 3, 3)]  # Assuming dim = 3 
+            return normals
+        elif t == 'list':
+            if 'normal-vectors.Cartesian' in d:
+                normals = [normalize(n) for n in np.array(d['normal-vectors.Cartesian'], dtype=float)]
+            elif 'normal-vectors.Miller' in d:
+                normals = [list(n) for n in np.array(d['normal-vectors.Cartesian'], dtype=int)]
+            else:
+                raise ValueError('In RiflesSO.generate_normals_from_dictionary(): "normal-vectors" list not found')
+            return normals
+        elif t == 'in-plane':
+            if 'plane-normal' in d:
+                a, b = plane_vectors(np.array(d['plane-normal'], dtype=float))
+            elif 'plane-a.Cartesian' in d and 'plane-b.Cartesian' in d:
+                a, b = [np.array(d['plane-' + v + '.Cartesian'], dtype=float) for v in ['a', 'b']]
+                a, b = plane_vectors(np.cross(a, b))
+            else:
+                raise ValueError('In RiflesSO.generate_normals_from_dictionary(): for type=in-plane, ' +
+                                 'the plane containing normals should be specified')
+            phi_range = d.get('degrees-range', [0, 360, 10])
+            phi_range = np.arange(*phi_range, dtype=float) * units.Degree
+            normals = [a * np.cos(phi) + b * np.sin(phi) for phi in phi_range]
+        else:
+            raise ValueError('In RiflesSO.generate_normals_from_dictionary(): unknown normals generation type')
+        return normals
 
-
-# -------------------------------------------------------------------------------------------------
-# Tests
-# -------------------------------------------------------------------------------------------------
-
-
-if __name__ == '__main__':
-    jdftx_dir = '../../jdftx_calculations/'
-    ref = RiflesSO() #Reflector()
-    ref.lattice = CrystallineHalfSpace(
-        lattice_vectors = (5.34145 * units.BohrRadius) * np.array([[0.0, 1, 1], [1, 0, 1], [1, 1, 0]]),
-        boundary_plane_indices = [1, 0, 0]
-    )
+    def generate_task_kpoints_from_dictionary(self, k_point_grid_clause: Union[List[int], str, dict]) -> Sequence:
+        '''Generate a Kgrid object or just a list of fractional k-point coordinates from a `k-point-grid` clause 
+        of the input script. The result should be iterable
+        '''
+        pass
     
-    tests2do = [ 'reflection.0th_adiabatic[material=graphene]' ]
-    # [ 'bandstruct.state_propagation[material=graphene]', 'bandstruct.DiracPoint[material=graphene]'
-    #   'bandstruct.wannierization[material=graphene]',
-    #   'reflection.0th_adiabatic[material=graphene]' ] 
-    for test in tests2do:
-        material = 'GaAs'
-        substr = 'material='
-        if substr in test:
-            pos_start = test.find(substr) + len(substr)
-            pos_end = pos_start
-            while pos_end < len(test) and test[pos_end].isalnum():
-                pos_end += 1
-            material = test[pos_start : pos_end]
-        calcdir = jdftx_dir + material + '/'
-        outdir = '../test/' + material + '/'
-        ref.load_electronic_structure('jdftx.wannierized', calcdir + 'scf_fine', calcdir + 'wannier')
-        # The tests themselves
-        if 'bandstruct.wannierization' in test:
-            print('-' * 80 + f'\nTest: band structure along a path in k-space [{material}]')
-            kpoints = np.loadtxt(calcdir + 'bandstruct_path.kpoints', skiprows=2, usecols=(1,2,3)).astype(float)
-            #kpoints = kpoints[0::5]
-            energies = np.array([[state[2] for state in ref.electronic_states_BZ(k)] for k in kpoints])
-            np.savetxt(outdir + 'band_energies.dat', np.column_stack([kpoints, energies / units.eV]), 
-                       header='k_x[frac] k_y[frac] k_z[frac] E_1[eV] ... E_n[eV]', fmt='%.6f')
-        elif 'bandstruct.state_propagation' in test:
-            print('-' * 80 + f'\nTest: Adiabatic propagation of states [{material}]')
-            kpoints = np.loadtxt(calcdir + 'bandstruct_path.kpoints', skiprows=2, usecols=(1,2,3)).astype(float)[::2]
-            states_k = ref.electronic_states_BZ(kpoints[0])
-            nbands = len(states_k)
-            propagated_energies = [[state[2] for state in states_k]]
-            for i in range(1, len(kpoints)):
-                propagated_states = [ref.propagate_band_in_BZ(states_k[n], kpoints[i]) for n in range(nbands)]
-                propagated_energies.append([state[2] for state in propagated_states])
-                states_k = propagated_states
-                print(f'Energies propagated to k-point #{i + 1} out of {len(kpoints)}!')
-            np.savetxt(outdir + 'propagated_energies.dat', np.array(propagated_energies) / units.eV, 
-                       header='E_1[eV] ... E_n[eV]', fmt='%.6f')
-        elif 'reflection.0th_adiabatic' in test:
-            print('-' * 80 + f'\nTest: Reflection in the 0th adiabatic approximation [{material}]')
-            kpoints = np.loadtxt(calcdir + 'bandstruct_path.kpoints', skiprows=2, usecols=(1,2,3)).astype(float)
-            k_in = kpoints[10]
-            n_Cartesian = normalize(ref.lattice.boundary_normal())
-            v_n = 0.0
-            n_in = 0
-            while True: # find a well-defined incident state
-                k_Cartesian = ref.lattice.fractional_coords_to_reciprocal_vector(k_in)
-                state_in = ref.electronic_states_BZ(k_in)[n_in]
-                v_n = state_in[4].dot(n_Cartesian)
-                if v_n <= 0:
-                    n_in += 1
-                else:
-                    break
-            print(f'For k_frac = {nparr2str(k_in, 4)} [frac] = {nparr2str(k_Cartesian * units.Angstrom)} Ao^(-1),',
-                f'\nreflection of state #{state_in[1]} with E = {state_in[2] / units.eV : .3f} eV',
-                f'and v_n = {nparr2str(state_in[4].dot(n_Cartesian) / (1e8 * units.cm / units.sec))} [1e8 cm/sec]',
-                f'\noff a plane with the normal n = {nparr2str(n_Cartesian)} gives:')
-            states_out = ref.reflect_wavefunction(state_in)
-            for prob, s in states_out:
-                print(f'   * probability = {prob},',
-                    f'k_frac = {nparr2str(s[0])}, band = {s[1]}, E = {s[2] / units.eV : .3f} eV,',
-                    '\n   * chi = ' + np.array2string(s[3], precision=1, floatmode='fixed', max_line_width=None, prefix='   * chi = ')
-                    )
-            
-            if material == 'graphene':
-                k_Kpoint_frac = np.array([1/3, 1/3, 0])
-                k_Kpoint_cart = ref.lattice.fractional_coords_to_reciprocal_vector(k_Kpoint_frac)
-                reflection_data = []
-                for phi in np.linspace(0, 2 * np.pi, 100):
-                    k_cart = k_Kpoint_cart + 0.025 * np.linalg.norm(k_Kpoint_cart) * np.array([math.cos(phi), math.sin(phi), 0.0])
-                    k_frac = ref.lattice.reciprocal_vector_to_fractional_coords(k_cart)
-                    for state_in in ref.electronic_states_BZ(k_frac):
-                        if state_in[4].dot(n_Cartesian) <= 0.0:  # Not an incident state
-                            continue
-                        if abs(state_in[2] + 4.23 * units.eV) > 2.5 * units.eV:  # Too far from Fermi surface
-                            continue
-                        print(f'Initial state with k_frac = {nparr2str(k_frac)}, band = {state_in[1]}, E = {state_in[2] / units.eV: .5f} eV reflects to:')
-                        states_out = ref.reflect_wavefunction(state_in)
-                        for prob, s in states_out:
-                            print(f'   * [P = {prob: .3f}], k_frac = {nparr2str(s[0])}, band = {s[1]}, E = {s[2] / units.eV : .5f} eV')
-                            kprime_cart = ref.lattice.fractional_coords_to_reciprocal_vector(np.mod(s[0], 1.0))
-                            reflection_data.append([*(k_cart * units.Angstrom), state_in[1], state_in[2] / units.eV,
-                                                    prob,
-                                                    *(kprime_cart * units.Angstrom), s[1], s[2] / units.eV
-                                                   ])
-                np.savetxt(outdir + 'reflection_data.dat', reflection_data, 
-                       header='k_x[Ao-1] k_y[Ao-1] k_z[Ao-1] n E[eV] P_refl kprime_x[Ao-1] kprime_y[Ao-1] kprime_z[Ao-1] nprime Eprime[eV]', 
-                       fmt='%.3f %.3f %.3f %d %.3f %.3f %.3f %.3f %.3f %d %.3f'
-                )
-        elif 'bandstruct.DiracPoint[material=graphene]' in test:
-            print('-' * 80 + f'\nTest: Energy bands near the Dirac points [{material}]')
-            k_Kpoint_frac = np.array([1/3, 1/3, 0])
-            bands_data = []
-            kpts_frac = [k_Kpoint_frac + dk * np.array([math.cos(phi), math.sin(phi), 0.0]) 
-                         for dk in np.linspace(0, 0.1, 10) 
-                         for phi in np.linspace(0, 2 * np.pi, 100)
-                        ]
-            for k_frac in kpts_frac:
-                for s in ref.electronic_states_BZ(k_frac):
-                    if abs(s[2] + 4.23 * units.eV) > 2.5 * units.eV:  # Too far from Fermi surface
-                        continue
-                    k_cart = ref.lattice.fractional_coords_to_reciprocal_vector(s[0])
-                    print(f'Found state with k_frac = {nparr2str(k_frac)}, band = {s[1]}, E = {s[2] / units.eV: .3f} eV')
-                    bands_data.append([*(k_cart * units.Angstrom), s[1], s[2] / units.eV])
-            np.savetxt(outdir + 'bands_Kvalley_data.dat', bands_data, 
-                       header='k_x[Ao-1] k_y[Ao-1] k_z[Ao-1] n E[eV]', 
-                       fmt='%.6f %.6f %.1f %d %.6f'
-            )
-
-        
-    
-
+    def write_reflection_coeffs_file(self, 
+                                     rho_data: List[List[Tuple[NDArray[np.float], NDArray[np.complex]]]],
+                                     filename: str, format: str ='binary'):
+        '''Write reflection coefficients data to an output binary or text file
+        '''
+        if format == 'binary':
+            with open(filename, 'wb') as f:
+                # 0. Write the header
+                f.write(b'Reflection coefficients file created by OK RiflesSO')
+                # 1. Write the lattice vectors, the k points [do not write the Bloch wave functions so far]
+                write_array_binary(self.lattice.lattice_vectors, f, dtype=np.float64)
+                kpts = np.fromiter(self.kpoint_grid, dtype=np.float64)
+                #nbands = len(rho_data) // kpts.shape[0]
+                nbands = self.electronic_structure.nb
+                write_array_binary(kpts, f, dtype=np.float64)
+                # 2. For each k and n, write the reflected states and their complex amplitudes
+                for ikn, rho_k_n in enumerate(rho_data):
+                    ik, n = ikn // nbands, ikn % nbands
+                    # TODO: optimize writing of the reflected wave functions to avoid reordering of the bands
+                    for k_refl, u_refl in rho_k_n:
+                        write_array_binary(k_refl, f, dtype=np.float64)
+                        write_array_binary(u_refl, f, dtype=np.complex128)
+        else:
+            raise ValueError('In RiflesSO.write_reflection_coeffs_file(): unknown output file format')
 
 
 

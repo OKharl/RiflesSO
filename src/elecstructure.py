@@ -17,6 +17,7 @@ import numpy as np
 
 from .lattice import CrystalLattice
 from . import units
+from .utils import nparr2str
 
 # -------------------------------------------------------------------------------------------------
 # Bloch states further allowed to be adiabatically transported across the Brillouin zone
@@ -111,6 +112,9 @@ class BlochState:
             self.v_band = np.array(field_value, dtype=float)
         else:
             raise ValueError('Field index out of range')
+
+    def __str__(self) -> str:
+        return f'BlochState(k_frac={nparr2str(self.k, prec=3)}, n={self.n}, E={self.E / units.eV: <.3f}eV)'
 # end(class BlochState)
 
 # -------------------------------------------------------------------------------------------------
